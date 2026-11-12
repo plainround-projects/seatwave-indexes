@@ -1,0 +1,21 @@
+# The index ledger: one row per index in the final schema (bare-schema.sql + final-indexes.sql).
+# IndexLedgerTest fails the build if an index has no row, a row has no listed user, a user is not
+# a ListedQuery, or the write step is not a WriteStep that benchmarks the index's own table. Fields:
+# index name | users (ListedQuery ids) | write cost measured by (WriteStep) | why it exists
+venues_pkey               | R6       | VENUE_CREATE    | each event's venue is found by key
+events_pkey               | R6       | EVENT_CREATE    | sections and holds name their event by key
+sections_pkey             | R6       | SECTION_CREATE  | a seat's section is found by key
+seats_pkey                | R6       | EVENT_SETUP     | a hold names a real seat (event_id, seat_label)
+customers_pkey            | R6       | CUSTOMER_SIGNUP | holds and bookings name their customer by key
+holds_pkey                | R2       | HOLDS_FINAL     | confirm and release find a hold by hold_id
+bookings_pkey             | R4       | BOOKINGS_FINAL  | a booking is found by booking_id
+one_seat_per_number       | Q1       | EVENT_SETUP     | seat map, seats half, index-only; also Module 13's rule
+one_claim_per_seat        | Q1 R1    | HOLDS_FINAL     | seat map, claims half; Module 13's invariant
+active_holds_by_customer  | Q2       | HOLDS_FINAL     | the basket and the hold-limit count; 4,000 entries
+hold_identity             | R3       | HOLDS_FINAL     | target of booking_matches_its_hold; largest index, kept for the rule
+active_holds_by_expiry    | Q5       | HOLDS_FINAL     | expiry sweeper; partial, so 4,000 entries not 60 million
+one_booking_per_hold      | R4       | BOOKINGS_FINAL  | Module 13's rule
+one_booking_per_seat      | R4       | BOOKINGS_FINAL  | Module 13's rule
+bookings_by_customer_date | Q3       | BOOKINGS_FINAL  | my-tickets page; equality then range; not covering
+events_by_venue_date      | Q4       | EVENT_CREATE    | event list; equality then range
+one_customer_per_ref      | R5       | CUSTOMER_SIGNUP | sign-in by reference; Module 13's rule

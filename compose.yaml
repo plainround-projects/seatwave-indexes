@@ -1,0 +1,125 @@
+# The study's database for Module 14: PostgreSQL alone, under the Compose project name
+# seatwave-indexes. Start and stop it with scripts/stack.sh, which brings everything down with
+# "down -v". The image is the Docker Official Image postgres:18.6 (Debian trixie), pinned by tag
+# and digest, checked on Docker Hub on 11 and 12 November 2026, with an arm64 variant (the same
+# pin as Module 13). One port, on 127.0.0.1 only, from Module 14's range 21400 to 21499. Nothing
+# runs privileged, nothing uses the host network or the Docker socket; the only folders mounted
+# are this project's db/init and build/lsm, both read-only.
+name: seatwave-indexes
+
+services:
+  postgres:
+    image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: seatwave
+      # Every password is a file generated at run time into .secrets (scripts/stack.sh up) and
+      # removed by scripts/stack.sh down, together with the database that used it.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+      - owner_password
+      - app_password
+    command:
+      - postgres
+      # 1 GB of shared buffers, a quarter of this container's memory: the study's tables and
+      # indexes do not fit in it; the rest of the reads come from the operating system's cache.
+      - -c
+      - shared_buffers=1GB
+      # Time spent reading and writing pages shows in EXPLAIN (ANALYZE) and in the statistics.
+      - -c
+      - track_io_timing=on
+      # The slow query log: every statement of 100 ms or more, the alert threshold of Section 10.
+      - -c
+      - log_min_duration_statement=100ms
+      # pg_stat_statements sums time and calls per query shape (db/init creates the extension).
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      # Fewer checkpoints while the seeder writes, without letting the log grow past 2 GB on
+      # Docker's shared disk (the default is 1 GB).
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - log_lock_waits=on
+      # 200, not the default 100: the write benchmark's pool holds 65 connections (64 writers and
+      # one for set-up), and PostgreSQL keeps 3 of the 100 for superusers, which left too little
+      # room for the plan runner, psql and the stack tests beside it (Module 13 found the same).
+      - -c
+      - max_connections=200
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    # The entrypoint starts as root to own the data folder, then runs PostgreSQL as its own user.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    # Four CPUs like Module 1's reference machine; 4 GB of memory, not its 16 GB, because the
+    # Docker virtual machine is shared. Section 8 says what that changes.
+    cpus: 4
+    mem_limit: 4g
+    shm_size: 1g
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    volumes:
+      - pgdata:/var/lib/postgresql
+      # Runs once, when the data volume is new: the two login roles, their rights, the extension.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:21400:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "seatwave"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Lab 3's LSM store: RocksHoldWritesCli in a container of the same Docker machine, so RocksDB
+  # writes to the same virtual disk, with the same 4 CPUs, as PostgreSQL does. Started only by
+  # scripts/stack.sh rocks (profile lsm), never by "up". The image is the Docker Official Image
+  # eclipse-temurin:25.0.5_8-jdk-noble, pinned by tag and digest, checked on Docker Hub on
+  # 12 November 2026, with an arm64 variant. It runs as the image's own user ubuntu (1000).
+  rocks:
+    profiles: ["lsm"]
+    image: eclipse-temurin:25.0.5_8-jdk-noble@sha256:80f67fb3d6f76e2d817d98a4cc2a9cf05f054d4e6adc5e2144bde671d722e63f
+    user: "1000:1000"
+    # java.io.tmpdir on the volume: rocksdbjni unpacks its native library there, and /tmp is a
+    # tmpfs that Docker mounts without the right to execute.
+    entrypoint:
+      - java
+      - -Djava.io.tmpdir=/home/ubuntu
+      - --enable-native-access=ALL-UNNAMED
+      - -cp
+      - /app/*
+      - io.plainround.seatwave.indexes.lsm.RocksHoldWritesCli
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    cap_drop:
+      - ALL
+    cpus: 4
+    mem_limit: 2g
+    tmpfs:
+      - /tmp
+    volumes:
+      # The program and its libraries, copied there by ./gradlew lsmClasspath.
+      - ./build/lsm:/app:ro
+      # A new named volume takes the owner of the folder it is mounted on, here the user ubuntu's
+      # home, so the non-root program may write its databases there.
+      - rocksdata:/home/ubuntu
+
+secrets:
+  postgres_password:
+    file: ./.secrets/postgres.password
+  owner_password:
+    file: ./.secrets/owner.password
+  app_password:
+    file: ./.secrets/app.password
+
+volumes:
+  pgdata:
+  rocksdata:
